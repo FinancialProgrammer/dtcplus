@@ -155,14 +155,6 @@ namespace dtcp {
   struct BasicVLSCallback : public BasicCallback {
     // callbacks
       // auxiliary
-        void heartbeat(nc_socket_t *sock, DTC::s_Heartbeat *msg) {
-          DTC::s_Heartbeat hb = {.NumDroppedMessages=0};
-          size_t bytes_written = 0;
-          nwrite(sock, &hb, sizeof(hb), &bytes_written, NC_OPT_NULL);
-        }
-        void encode_response(nc_socket_t *sock, DTC::s_EncodingResponse *msg) {
-          LOG("Protocol '%s', of version '%d', with encoding %d", msg->ProtocolType, msg->ProtocolVersion, msg->Encoding);
-        }
         void user_log(nc_socket_t *sock, DTC_VLS::s_UserMessage *msg) {
           LOG("UserLog, popup-%hhu: '%s'", msg->GetIsPopupMessage(), msg->GetUserMessage());
         }
@@ -204,51 +196,51 @@ namespace dtcp {
       // market depth
     // filter
     void filter(nc_socket_t *sock, const char *buffer, size_t bufferSize) {
-        size_t bytes_parsed = 0;
-        while (bytes_parsed < bufferSize) {
-          if (bufferSize - bytes_parsed < sizeof(DTC::s_MessageHeader)) {
-            WARN("bytes left is too little: received %zu, parsed %zu", bufferSize, bytes_parsed);
-            break;
-          }
-
-          uint16_t msg_size = this->GetSize(buffer);
-          uint16_t type = this->GetType(buffer);
-
-          if (msg_size > bufferSize - bytes_parsed) {
-            WARN("msg size could be invalid: %hu", msg_size);
-            break;
-          }
-
-          switch (type) {
-            case DTC::USER_MESSAGE:
-              this->user_log(sock, (DTC_VLS::s_UserMessage*)buffer);
-              break;
-            case DTC::GENERAL_LOG_MESSAGE:
-              this->general_log(sock, (DTC_VLS::s_GeneralLogMessage*)buffer);
-              break;
-            case DTC::ALERT_MESSAGE:
-              this->alert(sock, (DTC_VLS::s_AlertMessage*)buffer);
-              break;
-            case DTC::HEARTBEAT:
-              this->heartbeat(sock, (DTC::s_Heartbeat*)buffer);
-              break;
-            case DTC::ENCODING_RESPONSE:
-              this->encode_response(sock, (DTC::s_EncodingResponse*)buffer);
-              break;
-            case DTC::LOGON_RESPONSE:
-              this->logon_response(sock, (DTC_VLS::s_LogonResponse*)buffer);
-              break;
-            case DTC::LOGOFF:
-              this->logoff(sock, (DTC_VLS::s_Logoff*)buffer);
-              break;
-            default:
-              // LOG WARNING (Garbage Type)
-              WARN("Invalid Type: %hu", type);
-          };
-
-          bytes_parsed += msg_size;
-          buffer += msg_size;
+      size_t bytes_parsed = 0;
+      while (bytes_parsed < bufferSize) {
+        if (bufferSize - bytes_parsed < sizeof(DTC::s_MessageHeader)) {
+          WARN("bytes left is too little: received %zu, parsed %zu", bufferSize, bytes_parsed);
+          break;
         }
+
+        uint16_t msg_size = this->GetSize(buffer);
+        uint16_t type = this->GetType(buffer);
+
+        if (msg_size > bufferSize - bytes_parsed) {
+          WARN("msg size could be invalid: %hu", msg_size);
+          break;
+        }
+
+        switch (type) {
+          case DTC::USER_MESSAGE:
+            this->user_log(sock, (DTC_VLS::s_UserMessage*)buffer);
+            break;
+          case DTC::GENERAL_LOG_MESSAGE:
+            this->general_log(sock, (DTC_VLS::s_GeneralLogMessage*)buffer);
+            break;
+          case DTC::ALERT_MESSAGE:
+            this->alert(sock, (DTC_VLS::s_AlertMessage*)buffer);
+            break;
+          case DTC::HEARTBEAT:
+            this->heartbeat(sock, (DTC::s_Heartbeat*)buffer);
+            break;
+          case DTC::ENCODING_RESPONSE:
+            this->encode_response(sock, (DTC::s_EncodingResponse*)buffer);
+            break;
+          case DTC::LOGON_RESPONSE:
+            this->logon_response(sock, (DTC_VLS::s_LogonResponse*)buffer);
+            break;
+          case DTC::LOGOFF:
+            this->logoff(sock, (DTC_VLS::s_Logoff*)buffer);
+            break;
+          default:
+            // LOG WARNING (Garbage Type)
+            WARN("Invalid Type: %hu", type);
+        };
+
+        bytes_parsed += msg_size;
+        buffer += msg_size;
+      }
     }
   };
 
@@ -269,7 +261,7 @@ namespace dtcp {
     BinaryClient(nc_socket_t *sock) : m_sock(sock) {}
     BinaryClient(const BinaryClient&) = delete;
     BinaryClient(BinaryClient&&); // move the instance to a different class
-    // BinaryClient(BinaryVLSClient&&); // construct from binary client
+    // BinaryClient(BinaryVLSClient&&); // construct from binary vls client
     ~BinaryClient() { this->close(); } // close receive thread
 
     // socket
@@ -375,8 +367,7 @@ namespace dtcp {
         const uint16_t BaseStructureSizeField, 
         DTC_VLS::vls_t& VariableLengthStringField, 
         const uint16_t VariableLengthStringFieldOffset
-      )
-      {
+      ) {
         static char null_str[] = "";
         if (BaseStructureSizeField < VariableLengthStringFieldOffset + sizeof(DTC_VLS::vls_t))
           return null_str;
@@ -399,7 +390,7 @@ namespace dtcp {
           return this->sendbuf + VariableLengthStringField.Offset;
         }
       }
-      void addvls(
+      bool addvls(
         DTC_VLS::s_MessageHeader *header,
         DTC_VLS::vls_t *vls,
         const char *data, size_t datalen, size_t offset
@@ -410,10 +401,10 @@ namespace dtcp {
           *vls, offset
         );
         if (data == "") {
-          ERR("Fuck happened? %d", 1);
-          exit(1);
+          return false;
         }
         memcpy(_data, data, datalen);
+        return true;
       }
     // dtc
       // * EReq stands for Easy Request.
@@ -442,63 +433,35 @@ namespace dtcp {
           req->Integer_2 = int2;
 
           if (usr)
-            this->addvls(
+            if (!this->addvls(
               (DTC_VLS::s_MessageHeader*)req, &req->Username, 
               usr, strlen(usr), offsetof(DTC_VLS::s_LogonRequest, Username)
-            );
+            )) ERR("Couldn't add vls parameter, maybe check lengths");
           if (pswd)
-            this->addvls(
+            if (!this->addvls(
               (DTC_VLS::s_MessageHeader*)req, &req->Password, 
               pswd, strlen(pswd), offsetof(DTC_VLS::s_LogonRequest, Password)
-            );
+            )) ERR("Couldn't add vls parameter, maybe check lengths");
           if (text)
-            this->addvls(
+            if (!this->addvls(
               (DTC_VLS::s_MessageHeader*)req, &req->GeneralTextData, 
               text, strlen(text), offsetof(DTC_VLS::s_LogonRequest, GeneralTextData)
-            );
+            )) ERR("Couldn't add vls parameter, maybe check lengths");
           if (tradeacc)
-            this->addvls(
+            if (!this->addvls(
               (DTC_VLS::s_MessageHeader*)req, &req->TradeAccount, 
               tradeacc, strlen(tradeacc), offsetof(DTC_VLS::s_LogonRequest, TradeAccount)
-            );
+            )) ERR("Couldn't add vls parameter, maybe check lengths");
           if (hardwareIdent)
-            this->addvls(
+            if (!this->addvls(
               (DTC_VLS::s_MessageHeader*)req, &req->HardwareIdentifier, 
               hardwareIdent, strlen(hardwareIdent), offsetof(DTC_VLS::s_LogonRequest, HardwareIdentifier)
-            );
+            )) ERR("Couldn't add vls parameter, maybe check lengths");
           if (client)
-            this->addvls(
+            if (!this->addvls(
               (DTC_VLS::s_MessageHeader*)req, &req->ClientName, 
               client, strlen(client), offsetof(DTC_VLS::s_LogonRequest, ClientName)
-            );
-
-          
-          FILE *f = fopen("temp.txt", "wb");
-          fwrite(this->sendbuf, req->Size, 1, f);
-          fclose(f);
-
-          printf(
-            "Size %hu, Type %hu, BaseSize %hu\n"
-            "Protocol Version %d\n"
-            "Username Length %hu, Offset %hu, data %s\n"
-            "Password Length %hu, Offset %hu, data %s\n"
-            "GeneralTextData Length %hu, Offset %hu, data %s\n"
-            "Int1 %d, Int2 %d, hb %d, int3 %d\n"
-            "TradeAccount Length %hu, Offset %hu, data %s\n"
-            "HardwareIdentifier Length %hu, Offset %hu, data %s\n"
-            "ClientName Length %hu, Offset %hu, data %s\n"
-            "Mkt %d\n",
-            req->Size, req->Type, req->BaseSize,
-            req->ProtocolVersion,
-            req->Username.Length, req->Username.Offset, req->GetUsername(),
-            req->Password.Length, req->Password.Offset, req->GetPassword(),
-            req->GeneralTextData.Length, req->GeneralTextData.Offset, req->GetGeneralTextData(),
-            req->Integer_1, req->Integer_2, req->HeartbeatIntervalInSeconds, req->Unused1,
-            req->TradeAccount.Length, req->TradeAccount.Offset, req->GetTradeAccount(),
-            req->HardwareIdentifier.Length, req->HardwareIdentifier.Offset, req->GetHardwareIdentifier(),
-            req->ClientName.Length, req->ClientName.Offset, req->GetClientName(),
-            req->MarketDataTransmissionInterval
-          );
+            )) ERR("Couldn't add vls parameter, maybe check lengths");
 
           size_t _;
           return nwrite(this->m_sock, req, req->Size, &_, NC_OPT_NULL);

@@ -36,26 +36,32 @@ namespace dtcp {
 
     // callbacks
       // auxiliary
-        void user_log(nc_socket_t *sock, DTC::s_UserMessage *msg) {
+        void user_log(nc_socket_t *sock, void *voidmsg) {
+          DTC::s_UserMessage *msg = (DTC::s_UserMessage*)voidmsg;
           LOG("UserLog, popup-%hhu: '%s'", msg->GetIsPopupMessage(), msg->GetUserMessage());
         }
-        void general_log(nc_socket_t *sock, DTC::s_GeneralLogMessage *msg) {
+        void general_log(nc_socket_t *sock, void *voidmsg) {
+          DTC::s_GeneralLogMessage *msg = (DTC::s_GeneralLogMessage*)voidmsg;
           LOG("GeneralLog: '%s'", msg->GetMessageText());
         }
-        void alert(nc_socket_t *sock, DTC::s_AlertMessage *msg) {
+        void alert(nc_socket_t *sock, void *voidmsg) {
+          DTC::s_AlertMessage *msg = (DTC::s_AlertMessage*)voidmsg;
           WARN("Alert, acc-'%s': '%s'", msg->GetTradeAccount(), msg->GetMessageText());
         }
-        void heartbeat(nc_socket_t *sock, DTC::s_Heartbeat *msg) {
+        void heartbeat(nc_socket_t *sock, void *voidmsg) {
+          DTC::s_Heartbeat *msg = (DTC::s_Heartbeat*)voidmsg;
           DTC::s_Heartbeat hb = {.NumDroppedMessages=0};
           size_t bytes_written = 0;
           nwrite(sock, &hb, sizeof(hb), &bytes_written, NC_OPT_NULL);
         }
-        void encode_response(nc_socket_t *sock, DTC::s_EncodingResponse *msg) {
+        void encode_response(nc_socket_t *sock, void *voidmsg) {
+          DTC::s_EncodingResponse *msg = (DTC::s_EncodingResponse*)voidmsg;
           LOG("Protocol '%s', of version '%d', with encoding %d", msg->ProtocolType, msg->ProtocolVersion, msg->Encoding);
         }
       // Logging
       // auth
-        void logon_response(nc_socket_t *sock, DTC::s_LogonResponse *msg) { 
+        void logon_response(nc_socket_t *sock, void *voidmsg) { 
+          DTC::s_LogonResponse *msg = (DTC::s_LogonResponse*)voidmsg;
           switch (msg->Result) {
             case DTC::LOGON_SUCCESS:
               LOG("Connected to server '%s', Result '%s'", msg->ServerName, msg->ResultText);
@@ -74,7 +80,8 @@ namespace dtcp {
               return;
           }
         }
-        void logoff(nc_socket_t *sock, DTC::s_Logoff *msg) { 
+        void logoff(nc_socket_t *sock, void *voidmsg) {
+          DTC::s_Logoff *msg = (DTC::s_Logoff*)voidmsg;
           DTC::s_Logoff sendmsg = {
             .Reason="Server Requested Logoff",
             .DoNotReconnect=true
@@ -83,119 +90,27 @@ namespace dtcp {
           nwrite(sock, &sendmsg, sizeof(sendmsg), &written, NC_OPT_NULL);
         }
       // market data
+        void MktDataReject() {}
+        void MktDataSnapshot() {}
+        void MktDataUpdateTrade() {}
+        void MktDataUpdateTradeWithUnbundledIndicator2() {}
+        void MktDataUpdateTradeNoTimestamp() {}
+        void MktDataUpdateTradeCompact() {}
       // market depth
-    // filter
-    void filter(nc_socket_t *sock, const char *buffer, size_t bufferSize) {
-        size_t bytes_parsed = 0;
-        while (bytes_parsed < bufferSize) {
-          if (bufferSize - bytes_parsed < sizeof(DTC::s_MessageHeader)) {
-            WARN("bytes left is too little: received %zu, parsed %zu", bufferSize, bytes_parsed);
-            break;
-          }
+        void MktDepthReject() {}
+        void MktDepthSnapshotLevel() {}
+        void MktDepthSnapshotLevelFloat() {} // shouldn't this be compact?
+        void MktDepthUpdateLevel() {}
+        void MktDepthUpdateLevelFloatWithMS() {}
+        void MktDepthUpdateLevelNoTimestamp() {}
+    // END
 
-          uint16_t msg_size = this->GetSize(buffer);
-          uint16_t type = this->GetType(buffer);
-
-          if (msg_size > bufferSize - bytes_parsed) {
-            WARN("msg size could be invalid: %hu", msg_size);
-            break;
-          }
-
-          switch (type) {
-            case DTC::USER_MESSAGE:
-              this->user_log(sock, (DTC::s_UserMessage*)buffer);
-              break;
-            case DTC::GENERAL_LOG_MESSAGE:
-              this->general_log(sock, (DTC::s_GeneralLogMessage*)buffer);
-              break;
-            case DTC::ALERT_MESSAGE:
-              this->alert(sock, (DTC::s_AlertMessage*)buffer);
-              break;
-            case DTC::HEARTBEAT:
-              this->heartbeat(sock, (DTC::s_Heartbeat*)buffer);
-              break;
-            case DTC::ENCODING_RESPONSE:
-              this->encode_response(sock, (DTC::s_EncodingResponse*)buffer);
-              break;
-            case DTC::LOGON_RESPONSE:
-              this->logon_response(sock, (DTC::s_LogonResponse*)buffer);
-              break;
-            case DTC::LOGOFF:
-              this->logoff(sock, (DTC::s_Logoff*)buffer);
-              break;
-            default:
-              // LOG WARNING (Garbage Type)
-              WARN("Invalid Type: %hu", type);
-          };
-
-          bytes_parsed += msg_size;
-          buffer += msg_size;
-        }
-    }
-
-
+    // Base Functions
     template <class ChildSocketT>
-    static void receive_loop(
-      ChildSocketT *_this,
-      nc_socket_t *sock, 
-      char *buffer, size_t buffer_size, 
-      int *should_exit
+    static void filter(
+      ChildSocketT *_this, nc_socket_t *sock, 
+      char *buffer, size_t bufferSize
     ) {
-      nc_error_t err;
-      size_t bytes_received;
-      while (!(*should_exit)) {
-        err = nread(sock, buffer, buffer_size, &bytes_received, NC_OPT_NULL);
-        if (err == NC_ERR_WOULD_BLOCK) { continue; } // recv timeout
-        else if (err != NC_ERR_GOOD) { break; } // parse error
-        _this->filter(sock, buffer, bytes_received);
-      }
-      ::free(buffer);
-    }
-  };
-  struct BasicVLSCallback : public BasicCallback {
-    // callbacks
-      // auxiliary
-        void user_log(nc_socket_t *sock, DTC_VLS::s_UserMessage *msg) {
-          LOG("UserLog, popup-%hhu: '%s'", msg->GetIsPopupMessage(), msg->GetUserMessage());
-        }
-        void general_log(nc_socket_t *sock, DTC_VLS::s_GeneralLogMessage *msg) {
-          LOG("GeneralLog: '%s'", msg->GetMessageText());
-        }
-        void alert(nc_socket_t *sock, DTC_VLS::s_AlertMessage *msg) {
-          WARN("Alert, acc-'%s': '%s'", msg->GetTradeAccount(), msg->GetMessageText());
-        }
-      // Logging
-      // auth
-        void logon_response(nc_socket_t *sock, DTC_VLS::s_LogonResponse *msg) { 
-          switch (msg->Result) {
-            case DTC::LOGON_SUCCESS:
-              LOG("Connected to server '%s', Result '%s'", msg->GetServerName(), msg->GetResultText());
-              break;
-            case DTC::LOGON_RECONNECT_NEW_ADDRESS:
-              ERR("Logon Reconnect New Address Not Implemented %d", 0);
-              break;
-            case DTC::LOGON_ERROR:
-              WARN("Logon Error: '%s'", msg->GetResultText());
-              break;
-            case DTC::LOGON_ERROR_NO_RECONNECT:
-              WARN("Logon Error (No Reconnect): '%s'", msg->GetResultText());
-              break;
-            default:
-              WARN("Invalid Logon Result %d", msg->GetResult());
-              return;
-          }
-        }
-        void logoff(nc_socket_t *sock, DTC_VLS::s_Logoff *msg) {
-          DTC_VLS::s_Logoff sendmsg = {
-            .DoNotReconnect=true
-          };
-          size_t written;
-          nwrite(sock, &sendmsg, sizeof(sendmsg), &written, NC_OPT_NULL);
-        }
-      // market data
-      // market depth
-    // filter
-    void filter(nc_socket_t *sock, const char *buffer, size_t bufferSize) {
       size_t bytes_parsed = 0;
       while (bytes_parsed < bufferSize) {
         if (bufferSize - bytes_parsed < sizeof(DTC::s_MessageHeader)) {
@@ -203,8 +118,8 @@ namespace dtcp {
           break;
         }
 
-        uint16_t msg_size = this->GetSize(buffer);
-        uint16_t type = this->GetType(buffer);
+        uint16_t msg_size = _this->GetSize(buffer);
+        uint16_t type = _this->GetType(buffer);
 
         if (msg_size > bufferSize - bytes_parsed) {
           WARN("msg size could be invalid: %hu", msg_size);
@@ -213,25 +128,25 @@ namespace dtcp {
 
         switch (type) {
           case DTC::USER_MESSAGE:
-            this->user_log(sock, (DTC_VLS::s_UserMessage*)buffer);
+            _this->user_log(sock, buffer);
             break;
           case DTC::GENERAL_LOG_MESSAGE:
-            this->general_log(sock, (DTC_VLS::s_GeneralLogMessage*)buffer);
+            _this->general_log(sock, buffer);
             break;
           case DTC::ALERT_MESSAGE:
-            this->alert(sock, (DTC_VLS::s_AlertMessage*)buffer);
+            _this->alert(sock, buffer);
             break;
           case DTC::HEARTBEAT:
-            this->heartbeat(sock, (DTC::s_Heartbeat*)buffer);
+            _this->heartbeat(sock, buffer);
             break;
           case DTC::ENCODING_RESPONSE:
-            this->encode_response(sock, (DTC::s_EncodingResponse*)buffer);
+            _this->encode_response(sock, buffer);
             break;
           case DTC::LOGON_RESPONSE:
-            this->logon_response(sock, (DTC_VLS::s_LogonResponse*)buffer);
+            _this->logon_response(sock, buffer);
             break;
           case DTC::LOGOFF:
-            this->logoff(sock, (DTC_VLS::s_Logoff*)buffer);
+            _this->logoff(sock, buffer);
             break;
           default:
             // LOG WARNING (Garbage Type)
@@ -242,6 +157,74 @@ namespace dtcp {
         buffer += msg_size;
       }
     }
+
+    template <class ChildSocketT>
+    static void receive_loop(
+      ChildSocketT *_this, nc_socket_t *sock, 
+      char *buffer, size_t buffer_size, 
+      int *should_exit
+    ) {
+      nc_error_t err;
+      size_t bytes_received;
+      while (!(*should_exit)) {
+        err = nread(sock, buffer, buffer_size, &bytes_received, NC_OPT_NULL);
+        if (err == NC_ERR_WOULD_BLOCK) { continue; } // recv timeout
+        else if (err != NC_ERR_GOOD) { break; } // parse error
+        _this->template filter<ChildSocketT>(_this, sock, buffer, bytes_received);
+      }
+      ::free(buffer);
+    }
+  };
+  struct BasicVLSCallback : public BasicCallback {
+    // Callbacks
+    // auxiliary
+      void user_log(nc_socket_t *sock, void *voidmsg) {
+        DTC_VLS::s_UserMessage *msg = (DTC_VLS::s_UserMessage*)voidmsg;
+        LOG("UserLog, popup-%hhu: '%s'", msg->GetIsPopupMessage(), msg->GetUserMessage());
+      }
+      void general_log(nc_socket_t *sock, void *voidmsg) {
+        DTC_VLS::s_GeneralLogMessage *msg = (DTC_VLS::s_GeneralLogMessage*)voidmsg;
+        LOG("GeneralLog: '%s'", msg->GetMessageText());
+      }
+      void alert(nc_socket_t *sock, void *voidmsg) {
+        DTC_VLS::s_AlertMessage *msg = (DTC_VLS::s_AlertMessage*)voidmsg;
+        WARN("Alert, acc-'%s': '%s'", msg->GetTradeAccount(), msg->GetMessageText());
+      }
+    // Logging
+    // auth
+      void logon_response(nc_socket_t *sock, void *voidmsg) {
+        DTC_VLS::s_LogonResponse *msg = (DTC_VLS::s_LogonResponse*)voidmsg;
+        switch (msg->Result) {
+          case DTC::LOGON_SUCCESS:
+            LOG("Connected to server '%s', Result '%s'", msg->GetServerName(), msg->GetResultText());
+            break;
+          case DTC::LOGON_RECONNECT_NEW_ADDRESS:
+            ERR("Logon Reconnect New Address Not Implemented %d", 0);
+            break;
+          case DTC::LOGON_ERROR:
+            WARN("Logon Error: '%s'", msg->GetResultText());
+            break;
+          case DTC::LOGON_ERROR_NO_RECONNECT:
+            WARN("Logon Error (No Reconnect): '%s'", msg->GetResultText());
+            break;
+          default:
+            WARN("Invalid Logon Result %d", msg->GetResult());
+            return;
+        }
+      }
+      void logoff(nc_socket_t *sock, void *voidmsg) {
+        DTC_VLS::s_Logoff *msg = (DTC_VLS::s_Logoff*)voidmsg;
+        DTC_VLS::s_Logoff sendmsg = {
+          .DoNotReconnect=true
+        };
+        size_t written;
+        nwrite(sock, &sendmsg, sizeof(sendmsg), &written, NC_OPT_NULL);
+      }
+    // market data
+      void MktDataReject() {}
+    // market depth
+      void MktDepthReject() {}
+    // END
   };
 
   template <class CallbackT>
@@ -436,36 +419,79 @@ namespace dtcp {
             if (!this->addvls(
               (DTC_VLS::s_MessageHeader*)req, &req->Username, 
               usr, strlen(usr), offsetof(DTC_VLS::s_LogonRequest, Username)
-            )) ERR("Couldn't add vls parameter, maybe check lengths");
+            )) ERR("Couldn't add vls parameter, maybe check lengths %d", 0);
           if (pswd)
             if (!this->addvls(
               (DTC_VLS::s_MessageHeader*)req, &req->Password, 
               pswd, strlen(pswd), offsetof(DTC_VLS::s_LogonRequest, Password)
-            )) ERR("Couldn't add vls parameter, maybe check lengths");
+            )) ERR("Couldn't add vls parameter, maybe check lengths %d", 0);
           if (text)
             if (!this->addvls(
               (DTC_VLS::s_MessageHeader*)req, &req->GeneralTextData, 
               text, strlen(text), offsetof(DTC_VLS::s_LogonRequest, GeneralTextData)
-            )) ERR("Couldn't add vls parameter, maybe check lengths");
+            )) ERR("Couldn't add vls parameter, maybe check lengths %d", 0);
           if (tradeacc)
             if (!this->addvls(
               (DTC_VLS::s_MessageHeader*)req, &req->TradeAccount, 
               tradeacc, strlen(tradeacc), offsetof(DTC_VLS::s_LogonRequest, TradeAccount)
-            )) ERR("Couldn't add vls parameter, maybe check lengths");
+            )) ERR("Couldn't add vls parameter, maybe check lengths %d", 0);
           if (hardwareIdent)
             if (!this->addvls(
               (DTC_VLS::s_MessageHeader*)req, &req->HardwareIdentifier, 
               hardwareIdent, strlen(hardwareIdent), offsetof(DTC_VLS::s_LogonRequest, HardwareIdentifier)
-            )) ERR("Couldn't add vls parameter, maybe check lengths");
+            )) ERR("Couldn't add vls parameter, maybe check lengths %d", 0);
           if (client)
             if (!this->addvls(
               (DTC_VLS::s_MessageHeader*)req, &req->ClientName, 
               client, strlen(client), offsetof(DTC_VLS::s_LogonRequest, ClientName)
-            )) ERR("Couldn't add vls parameter, maybe check lengths");
+            )) ERR("Couldn't add vls parameter, maybe check lengths %d", 0);
 
           size_t _;
           return nwrite(this->m_sock, req, req->Size, &_, NC_OPT_NULL);
         }
+        nc_error_t EReqLogoff(
+          const char *reason,
+          uint8_t dont_reconnect = false
+        ) {
+          DTC_VLS::s_Logoff base_req = {};
+          DTC_VLS::s_Logoff *req = (DTC_VLS::s_Logoff*)this->sendbuf;
+          memcpy(req, &base_req, sizeof(base_req));
+          req->DoNotReconnect = dont_reconnect;
+          if (reason)
+            if (!this->addvls(
+              (DTC_VLS::s_MessageHeader*)req, &req->Reason, 
+              reason, strlen(reason), offsetof(DTC_VLS::s_Logoff, Reason)
+            )) ERR("Couldn't add vls parameter, maybe check lengths %d", 0);
+          size_t _;
+          return nwrite(this->m_sock, req, req->Size, &_, NC_OPT_NULL);
+        }
+      // market data
+        nc_error_t EReqMktData(
+          DTC::RequestActionEnum reqAct,
+		      const char *symbol, const char *exchange,
+          uint32_t sID = 1, uint32_t intervalForSnapshotMS = 0
+        ) {
+          DTC_VLS::s_MarketDataRequest base_req = {};
+          DTC_VLS::s_MarketDataRequest *req = (DTC_VLS::s_MarketDataRequest*)this->sendbuf;
+          memcpy(req, &base_req, sizeof(base_req));
+          req->IntervalForSnapshotUpdatesInMilliseconds = intervalForSnapshotMS;
+          req->SymbolID = sID;
+
+          if (symbol)
+            if (!this->addvls(
+              (DTC_VLS::s_MessageHeader*)req, &req->Symbol, 
+              symbol, strlen(symbol), offsetof(DTC_VLS::s_MarketDataRequest, Symbol)
+            )) ERR("Couldn't add vls parameter, maybe check lengths %d", 0);
+          if (exchange)
+            if (!this->addvls(
+              (DTC_VLS::s_MessageHeader*)req, &req->Exchange, 
+              exchange, strlen(exchange), offsetof(DTC_VLS::s_MarketDataRequest, Exchange)
+            )) ERR("Couldn't add vls parameter, maybe check lengths %d", 0);
+
+          size_t _;
+          return nwrite(this->m_sock, req, req->Size, &_, NC_OPT_NULL);
+        }
+      // market depth
     // END
   };
 

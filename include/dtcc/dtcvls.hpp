@@ -12,6 +12,7 @@
 #include "dtcc/dtc.hpp"
 #include <assert.h>
 #include <limits>
+#include <cstddef> // offsetof
 
 namespace DTC_VLS
 {

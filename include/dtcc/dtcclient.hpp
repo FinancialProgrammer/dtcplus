@@ -66,6 +66,9 @@ class Client {
   volatile sig_atomic_t m_encodingF = false; // set in recieve thread, checked in main thread
   volatile DTC::EncodingEnum m_encoding; // set in recieve thread, read in main thread
 
+  volatile sig_atomic_t m_logonresponseF = false; // set in recieve thread, checked in main thread
+  volatile DTC::LogonStatusEnum m_logonresponse; // set in recieve thread, read in main thread
+public:
   CallbackT callbacks;
 
   char sendbuf[65536];
@@ -73,7 +76,7 @@ class Client {
 public: // special functions
   Client(nc_socket_t *sock) : 
     m_sock(sock), 
-    callbacks(sock, &this->m_exit, &this->m_encoding, &this->m_encodingF) 
+    callbacks(sock, &this->m_exit, &this->m_encoding, &this->m_encodingF, &this->m_logonresponse, &this->m_logonresponseF) 
   {}
   Client(const Client&) = delete;
   Client(Client&&);
@@ -163,7 +166,7 @@ public: // E*
       return this->sendreq(&req, sizeof(req));
     }
     DTC::EncodingEnum EGetEncoding() {
-      while (!this->m_encodingF); // wait until encoding set
+      while (!this->m_encodingF) std::this_thread::yield(); // wait until encoding set
       return this->m_encoding;
     }
   // --- auth --- //
@@ -216,6 +219,10 @@ public: // E*
         return NC_ERR_NULL;
       }
     }
+    DTC::LogonStatusEnum EGetLogon() {
+      while (!this->m_logonresponseF) std::this_thread::yield(); // wait until encoding set
+      return this->m_logonresponse;
+    }
     nc_error_t EReqLogoff(
       const char *reason,
       uint8_t dont_reconnect = 0
@@ -243,7 +250,6 @@ public: // E*
       }
     }
   // --- market auxiliary --- //
-  
   // --- market data --- //
     nc_error_t EReqMktData(
       DTC::RequestActionEnum reqAct, uint32_t ID,
@@ -251,7 +257,7 @@ public: // E*
       uint32_t IntervalSnapMS
     ) {
       if (this->m_encoding == DTC::BINARY_ENCODING) {
-        DTC::s_MarketDataRequest req{
+        DTC::s_MarketDataRequest req{ 
           .RequestAction=reqAct,
           .SymbolID=ID,
           .IntervalForSnapshotUpdatesInMilliseconds=IntervalSnapMS
@@ -263,14 +269,14 @@ public: // E*
         size_t _;
         return nwrite(this->m_sock, &req, sizeof(req), &_, NC_OPT_NULL);
       } else if (this->m_encoding == DTC::BINARY_WITH_VARIABLE_LENGTH_STRINGS) {
-        DTC::s_MarketDataRequest basereq{
+        DTC_VLS::s_MarketDataRequest basereq{
           .RequestAction=reqAct,
           .SymbolID=ID,
           .IntervalForSnapshotUpdatesInMilliseconds=IntervalSnapMS
         };
         DTC_VLS::s_MarketDataRequest *req = (DTC_VLS::s_MarketDataRequest*)this->sendbuf;
-        memcpy(&req, &basereq, sizeof(basereq));
-
+        memcpy(req, &basereq, sizeof(basereq));
+        
         DTCC_ADDVLS(symbol, DTC_VLS::s_MarketDataRequest, Symbol)
         DTCC_ADDVLS(exchange, DTC_VLS::s_MarketDataRequest, Exchange)
 

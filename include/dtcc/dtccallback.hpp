@@ -12,15 +12,27 @@ typedef void (*callback_t)(void*);
 
 namespace dtcc {
   struct BaseCallback {
-    sig_atomic_t volatile*m_exit;
-    sig_atomic_t volatile*m_clientencodingF;
-    DTC::EncodingEnum volatile*m_clientencoding;
+    sig_atomic_t volatile* m_exit;
+    sig_atomic_t volatile* m_clientencodingF;
+    DTC::EncodingEnum volatile* m_clientencoding;
     DTC::EncodingEnum m_encoding;
+
+    sig_atomic_t volatile* m_clientlogonF;
+    DTC::LogonStatusEnum volatile* m_clientlogon;
 
     nc_socket_t *m_sock;
 
-    BaseCallback(nc_socket_t *sock, sig_atomic_t volatile*exit, DTC::EncodingEnum volatile*clientencoding, sig_atomic_t volatile*clientencodingF) 
-    : m_sock(sock), m_exit(exit), m_clientencoding(clientencoding), m_clientencodingF(clientencodingF) {}
+    BaseCallback(
+      nc_socket_t *sock, 
+      sig_atomic_t volatile* exit, 
+      DTC::EncodingEnum volatile* clientencoding, sig_atomic_t volatile* clientencodingF,
+      DTC::LogonStatusEnum volatile* m_clientlogon, sig_atomic_t volatile* m_clientlogonF
+    ) : 
+      m_sock(sock), 
+      m_exit(exit), 
+      m_clientencoding(clientencoding), m_clientencodingF(clientencodingF),
+      m_clientlogon(m_clientlogon), m_clientlogonF(m_clientlogonF)
+    {}
     BaseCallback(const BaseCallback&) = delete;
     BaseCallback(const BaseCallback&&) = delete;
     ~BaseCallback() = default;
@@ -50,6 +62,9 @@ namespace dtcc {
           const char *serverName, const char *symbolExchangeDelim,
           uint8_t *flags1, uint8_t *flags2
         ) {
+          *this->m_clientlogon = result;
+          *this->m_clientlogonF = true; // alert client value is now readable
+
           if (result == DTC::LogonStatusEnum::LOGON_SUCCESS) {
             LOG("Logon Sucess to %s", serverName);
           } else if (result == DTC::LogonStatusEnum::LOGON_RECONNECT_NEW_ADDRESS) {
@@ -58,16 +73,52 @@ namespace dtcc {
             ERR("Logon Failed to %s with result %s", serverName, resultText);
           } else if (result == DTC::LogonStatusEnum::LOGON_ERROR_NO_RECONNECT) {
             ERR("Logon Failed (No Reconnect) to %s with result %s", serverName, resultText);
+          } else {
+            ERR("Invalid Logon Result %d with text %s", result, resultText);
           }
         }
         void Logoff(const char *reason, uint8_t DoNotReconnect) {
-          WARN("Server Sent Logoff, Client Attempting Graceful Close");
+          WARN("Server Sent Logoff with reason '%s', Client Attempting Graceful Close", reason);
           *m_exit = true;
         }
       // --- market auxiliary --- //
+        void MktFeedStatus(DTC::s_MarketDataFeedStatus *msg) {}
+        void MktFeedSymbolStatus(DTC::s_MarketDataFeedSymbolStatus *msg) {}
       // --- market data --- //
+        void MktDataReject(uint32_t symbolID, const char *rejectText) {
+          LOG("Market Data Request Rejected %u, '%s'", symbolID, rejectText);
+        }
+        void MktDataSnapshot(DTC::s_MarketDataSnapshot *msg) {
+          LOG("Market Data Snapshot Sent");
+        }
+        // Trade
+        void MktDataUpdateTrade(DTC::s_MarketDataUpdateTrade *msg) {}
+        void MktDataUpdateTradeWithUnbundledIndicator2(DTC::s_MarketDataUpdateTradeWithUnbundledIndicator2 *msg) {}
+        void MktDataUpdateTradeNoTimestamp(DTC::s_MarketDataUpdateTradeNoTimestamp *msg) {}
+        void MktDataUpdateTradeCompact(DTC::s_MarketDataUpdateTradeCompact *msg) {}
+        void MktDataUpdateLastTradeSnapshot(DTC::s_MarketDataUpdateLastTradeSnapshot *msg) {}
+        // bid ask
+        void MktDataUpdateBidAsk(DTC::s_MarketDataUpdateBidAsk *msg) {}
+        void MktDataUpdateBidAskNoTimeStamp(DTC::s_MarketDataUpdateBidAskNoTimeStamp *msg) {}
+        void MktDataUpdateBidAskFloatMS(DTC::s_MarketDataUpdateBidAskFloatWithMicroseconds *msg) {}
+        // session
+        void MktDataUpdateSessionOpen(DTC::s_MarketDataUpdateSessionOpen *msg) {}
+        void MktDataUpdateSessionHigh(DTC::s_MarketDataUpdateSessionHigh *msg) {}
+        void MktDataUpdateSessionLow(DTC::s_MarketDataUpdateSessionLow *msg) {}
+        void MktDataUpdateSessionSettlement(DTC::s_MarketDataUpdateSessionSettlement *msg) {}
+        void MktDataUpdateSessionVolume(DTC::s_MarketDataUpdateSessionVolume *msg) {}
+        void MktDataUpdateSessionOpenInterest(DTC::s_MarketDataUpdateOpenInterest *msg) {}
+        void MktDataUpdateSessionNumTrades(DTC::s_MarketDataUpdateSessionNumTrades *msg) {}
+        void MktDataUpdateSessionDate(DTC::s_MarketDataUpdateTradingSessionDate *msg) {}
       // --- market depth --- //
+        void MktDepthReject(uint32_t symbolID, const char *rejectText) {}
+        void MktDepthSnapshotLevel(DTC::s_MarketDepthSnapshotLevel *msg) {}
+        void MktDepthSnapshotLevelFloat(DTC::s_MarketDepthSnapshotLevelFloat *msg) {}
+        void MktDepthUpdateLevel(DTC::s_MarketDepthUpdateLevel *msg) {}
+        void MktDepthUpdateLevelFloatMS(DTC::s_MarketDepthUpdateLevelFloatWithMilliseconds *msg) {}
+        void MktDepthUpdateLevelNoTimestamp(DTC::s_MarketDepthUpdateLevelNoTimestamp *msg) {}
       // --- trading auxiliary --- //
+        void TradingSymbolStatus(DTC::s_TradingSymbolStatus *msg) {}
       // --- order --- //
       // --- position --- //
     // backend
@@ -185,6 +236,32 @@ namespace dtcc {
               );
             }
             break;
+          case DTC::MARKET_DATA_REJECT: 
+            if (_this->m_encoding == DTC::EncodingEnum::BINARY_ENCODING) {
+              _this->MktDataReject(
+                ((DTC::s_MarketDataReject*)buffer)->SymbolID,
+                ((DTC::s_MarketDataReject*)buffer)->GetRejectText()
+              );
+            } else {
+              _this->MktDataReject(
+                ((DTC_VLS::s_MarketDataReject*)buffer)->SymbolID,
+                ((DTC_VLS::s_MarketDataReject*)buffer)->GetRejectText()
+              );
+            }
+            break;
+          case DTC::MARKET_DEPTH_REJECT: 
+            if (_this->m_encoding == DTC::EncodingEnum::BINARY_ENCODING) {
+              _this->MktDepthReject(
+                ((DTC::s_MarketDepthReject*)buffer)->SymbolID,
+                ((DTC::s_MarketDepthReject*)buffer)->GetRejectText()
+              );
+            } else {
+              _this->MktDepthReject(
+                ((DTC_VLS::s_MarketDepthReject*)buffer)->SymbolID,
+                ((DTC_VLS::s_MarketDepthReject*)buffer)->GetRejectText()
+              );
+            }
+            break;
           // Universal
           case DTC::ENCODING_RESPONSE:
             _this->Encoding(
@@ -196,9 +273,46 @@ namespace dtcc {
               ((DTC::s_Heartbeat*)buffer)
             );
             break;
+          // Market Auxiliary
+          case DTC::MARKET_DATA_FEED_STATUS: 
+            _this->MktFeedStatus( ((DTC::s_MarketDataFeedStatus*)buffer) );
+            break;
+          case DTC::MARKET_DATA_FEED_SYMBOL_STATUS: 
+            _this->MktFeedSymbolStatus( ((DTC::s_MarketDataFeedSymbolStatus*)buffer) );
+            break;
+          // Trading Auxiliary
+          case DTC::TRADING_SYMBOL_STATUS:
+            _this->TradingSymbolStatus( ((DTC::s_TradingSymbolStatus*)buffer) );
+            break;
+          // Market Data
+          case DTC::MARKET_DATA_SNAPSHOT: _this->MktDataSnapshot( ((DTC::s_MarketDataSnapshot*)buffer) ); break;
+          case DTC::MARKET_DATA_UPDATE_TRADE: _this->MktDataUpdateTrade( ((DTC::s_MarketDataUpdateTrade*)buffer) ); break;
+          case DTC::MARKET_DATA_UPDATE_TRADE_WITH_UNBUNDLED_INDICATOR_2: _this->MktDataUpdateTradeWithUnbundledIndicator2( ((DTC::s_MarketDataUpdateTradeWithUnbundledIndicator2*)buffer) ); break;
+          case DTC::MARKET_DATA_UPDATE_TRADE_NO_TIMESTAMP: _this->MktDataUpdateTradeNoTimestamp( ((DTC::s_MarketDataUpdateTradeNoTimestamp*)buffer) ); break;
+          case DTC::MARKET_DATA_UPDATE_TRADE_COMPACT: _this->MktDataUpdateTradeCompact( ((DTC::s_MarketDataUpdateTradeCompact*)buffer) ); break;
+          case DTC::MARKET_DATA_UPDATE_LAST_TRADE_SNAPSHOT: _this->MktDataUpdateLastTradeSnapshot( ((DTC::s_MarketDataUpdateLastTradeSnapshot*)buffer) ); break;
+          case DTC::MARKET_DATA_UPDATE_BID_ASK: _this->MktDataUpdateBidAsk( ((DTC::s_MarketDataUpdateBidAsk*)buffer) ); break;
+          case DTC::MARKET_DATA_UPDATE_BID_ASK_NO_TIMESTAMP: _this->MktDataUpdateBidAskNoTimeStamp( ((DTC::s_MarketDataUpdateBidAskNoTimeStamp*)buffer) ); break;
+          case DTC::MARKET_DATA_UPDATE_BID_ASK_FLOAT_WITH_MICROSECONDS: _this->MktDataUpdateBidAskFloatMS( ((DTC::s_MarketDataUpdateBidAskFloatWithMicroseconds*)buffer) ); break;
+          case DTC::MARKET_DATA_UPDATE_SESSION_OPEN: _this->MktDataUpdateSessionOpen( ((DTC::s_MarketDataUpdateSessionOpen*)buffer) ); break;
+          case DTC::MARKET_DATA_UPDATE_SESSION_HIGH: _this->MktDataUpdateSessionHigh( ((DTC::s_MarketDataUpdateSessionHigh*)buffer) ); break;
+          case DTC::MARKET_DATA_UPDATE_SESSION_LOW: _this->MktDataUpdateSessionLow( ((DTC::s_MarketDataUpdateSessionLow*)buffer) ); break;
+          case DTC::MARKET_DATA_UPDATE_SESSION_SETTLEMENT: _this->MktDataUpdateSessionSettlement( ((DTC::s_MarketDataUpdateSessionSettlement*)buffer) ); break;
+          case DTC::MARKET_DATA_UPDATE_SESSION_VOLUME: _this->MktDataUpdateSessionVolume( ((DTC::s_MarketDataUpdateSessionVolume*)buffer) ); break;
+          case DTC::MARKET_DATA_UPDATE_OPEN_INTEREST: _this->MktDataUpdateSessionOpenInterest( ((DTC::s_MarketDataUpdateOpenInterest*)buffer) ); break;
+          case DTC::MARKET_DATA_UPDATE_SESSION_NUM_TRADES: _this->MktDataUpdateSessionNumTrades( ((DTC::s_MarketDataUpdateSessionNumTrades*)buffer) ); break;
+          case DTC::MARKET_DATA_UPDATE_TRADING_SESSION_DATE: _this->MktDataUpdateSessionDate( ((DTC::s_MarketDataUpdateTradingSessionDate*)buffer) ); break;
+          // Market Depth
+          case DTC::MARKET_DEPTH_SNAPSHOT_LEVEL: _this->MktDepthSnapshotLevel( ((DTC::s_MarketDepthSnapshotLevel*)buffer) ); break;
+          case DTC::MARKET_DEPTH_SNAPSHOT_LEVEL_FLOAT: _this->MktDepthSnapshotLevelFloat( ((DTC::s_MarketDepthSnapshotLevelFloat*)buffer) ); break;
+          case DTC::MARKET_DEPTH_UPDATE_LEVEL: _this->MktDepthUpdateLevel( ((DTC::s_MarketDepthUpdateLevel*)buffer) ); break;
+          case DTC::MARKET_DEPTH_UPDATE_LEVEL_FLOAT_WITH_MILLISECONDS: _this->MktDepthUpdateLevelFloatMS( ((DTC::s_MarketDepthUpdateLevelFloatWithMilliseconds*)buffer) ); break;
+          case DTC::MARKET_DEPTH_UPDATE_LEVEL_NO_TIMESTAMP: _this->MktDepthUpdateLevelNoTimestamp( ((DTC::s_MarketDepthUpdateLevelNoTimestamp*)buffer) ); break;
+          // default
           default:
             // LOG WARNING (Garbage Type)
             WARN("Invalid Type: %hu", type);
+            LOG("Invalid Type: %hu", type);
         };
 
         bytes_parsed += msg_size;
@@ -224,6 +338,4 @@ namespace dtcc {
 
 
   };
-
-
 };

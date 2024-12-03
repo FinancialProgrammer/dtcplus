@@ -3,10 +3,10 @@ project(dtcplus VERSION 0.0.0)
 
 set(LINK_LIBS netc)
 set(SRC_FILES 
-    src/binary.cpp src/vls.cpp
-    src/backend/dtc.cpp
-    src/backend/dtcvls.cpp
-    src/backend/dtc_extsc.cpp
+  src/binary.cpp src/vls.cpp
+  src/backend/dtc.cpp
+  src/backend/dtcvls.cpp
+  src/backend/dtc_extsc.cpp
 )
 
 include(GNUInstallDirs)

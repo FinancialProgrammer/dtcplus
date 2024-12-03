@@ -74,9 +74,8 @@ public:
   char sendbuf[65536];
   size_t sendbufsize = 65536;
 public: // special functions
-  Client(nc_socket_t *sock) : 
-    m_sock(sock), 
-    callbacks(sock, &this->m_exit, &this->m_encoding, &this->m_encodingF, &this->m_logonresponse, &this->m_logonresponseF) 
+  Client() :
+    callbacks(&this->m_exit, &this->m_encoding, &this->m_encodingF, &this->m_logonresponse, &this->m_logonresponseF) 
   {}
   Client(const Client&) = delete;
   Client(Client&&);
@@ -87,6 +86,10 @@ public: // special functions
 
   bool operator!() { return this->m_exit; } // check if client is usable
 public: // backend
+  void set_socket(nc_socket_t *sock) {
+    this->m_sock = sock;
+    this->callbacks.set_socket(sock);
+  }
   void open(char *recv_buffer, size_t recv_buffer_size) { // open connection to either historical or realtime server
     // start receive thread
     this->m_recv_thread = std::thread(

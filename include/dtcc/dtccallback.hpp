@@ -22,13 +22,11 @@ namespace dtcc {
 
     nc_socket_t *m_sock;
 
-    BaseCallback(
-      nc_socket_t *sock, 
+    BaseCallback( 
       sig_atomic_t volatile* exit, 
       DTC::EncodingEnum volatile* clientencoding, sig_atomic_t volatile* clientencodingF,
       DTC::LogonStatusEnum volatile* m_clientlogon, sig_atomic_t volatile* m_clientlogonF
     ) : 
-      m_sock(sock), 
       m_exit(exit), 
       m_clientencoding(clientencoding), m_clientencodingF(clientencodingF),
       m_clientlogon(m_clientlogon), m_clientlogonF(m_clientlogonF)
@@ -138,6 +136,7 @@ namespace dtcc {
         }
         return 65535; // max uint16 value
       }
+      void set_socket(nc_socket_t *sock) { this->m_sock = sock; }
     // filter
     template <class ChildSocketT>
     static void filter(

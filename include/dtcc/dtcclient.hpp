@@ -57,12 +57,16 @@ int main() {
   if ((param)) { memcpy(req.ident, &(param), strlen((param))); }
 
 namespace dtcc {
-template <class CallbackT>
+template <class CallbackT, size_t T_thread_count>
 class Client {
+  // connection
   nc_socket_t *m_sock;
-  volatile sig_atomic_t m_exit = false;
-  std::thread m_recv_thread;
 
+  // sync
+  volatile sig_atomic_t m_exit = false;
+  volatile sig_atomic_t m_threads_completed[T_thread_count];
+
+  // client-worker thread communication
   volatile sig_atomic_t m_encodingF = false; // set in recieve thread, checked in main thread
   volatile DTC::EncodingEnum m_encoding; // set in recieve thread, read in main thread
 
@@ -90,26 +94,32 @@ public: // backend
     this->m_sock = sock;
     this->callbacks.set_socket(sock);
   }
-  void open(char *recv_buffer, size_t recv_buffer_size) { // open connection to either historical or realtime server
+  void open(size_t recv_buffer_size) { // open connection to either historical or realtime server
     // start receive thread
-    this->m_recv_thread = std::thread(
-      &(CallbackT::template receive_loop<CallbackT>),
-      &this->callbacks,
-      recv_buffer,
-      recv_buffer_size
-    );
-  }
-  void close() { 
-    this->m_exit = true;
-    if (this->m_recv_thread.joinable()) {
-      this->m_recv_thread.join(); // allow receive thread cleanup
+    for (size_t i = 0; i < T_thread_count; ++i) {
+      std::thread tmpt(
+        &(CallbackT::template receive_loop<CallbackT>),
+        &this->callbacks,
+        malloc(recv_buffer_size), recv_buffer_size,
+        &m_threads_completed[i]
+      );
+      tmpt.detach();
     }
-  } // close connection
+  }
+  void close() { // rejoin receive thread
+    this->m_exit = true;
+    __local_dtcclient_close_repeat_label:
+    for (size_t i = 0; i < T_thread_count; ++i) {
+      if (!m_threads_completed[i]) {
+        goto __local_dtcclient_close_repeat_label;
+      }
+    }
+  }
   nc_socket_t *socket() { return this->m_sock; }
 
   nc_error_t sendreq(const void *b, size_t bs) {
     size_t _;
-    return nwrite(this->m_sock, b, bs, &_, NC_OPT_NULL);
+    return nwrite(this->m_sock, b, bs, &_, NC_OPT_DO_ALL);
     // if (err != NC_ERR_GOOD) {
     //   ERR("socket writing error, server may have closed its connection '%s'", nstrerr(err));
     //   this->m_exit = true;
@@ -170,6 +180,7 @@ public: // E*
     }
     DTC::EncodingEnum EGetEncoding() {
       while (!this->m_encodingF) std::this_thread::yield(); // wait until encoding set
+      this->m_logonresponseF = false;
       return this->m_encoding;
     }
   // --- auth --- //
@@ -224,6 +235,7 @@ public: // E*
     }
     DTC::LogonStatusEnum EGetLogon() {
       while (!this->m_logonresponseF) std::this_thread::yield(); // wait until encoding set
+      this->m_logonresponseF = false;
       return this->m_logonresponse;
     }
     nc_error_t EReqLogoff(

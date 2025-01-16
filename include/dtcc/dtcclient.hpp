@@ -6,8 +6,9 @@
 #include <netc.h>
 
 #include <thread>
-#include <string.h>
-#include <signal.h>
+#include <cstring>
+#include <csignal>
+#include <cstdlib>
 
 /*
 * For json encoding i will probably just serialize the binary vls struct

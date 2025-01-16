@@ -180,8 +180,8 @@ public: // E*
       return this->sendreq(&req, sizeof(req));
     }
     DTC::EncodingEnum EGetEncoding() {
-      while (!this->m_encodingF) std::this_thread::yield(); // wait until encoding set
-      this->m_logonresponseF = false;
+      while (!this->m_encodingF) std::this_thread::yield(); // wait until encoding is set
+      this->m_encodingF = false;
       return this->m_encoding;
     }
   // --- auth --- //
@@ -235,7 +235,7 @@ public: // E*
       }
     }
     DTC::LogonStatusEnum EGetLogon() {
-      while (!this->m_logonresponseF) std::this_thread::yield(); // wait until encoding set
+      while (!this->m_logonresponseF) std::this_thread::yield(); // wait until logon is set
       this->m_logonresponseF = false;
       return this->m_logonresponse;
     }

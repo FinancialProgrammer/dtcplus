@@ -14,14 +14,21 @@ typedef void (*callback_t)(void*);
 
 namespace dtcc {
   struct BaseCallback {
+    // exit
     sig_atomic_t volatile* m_exit;
+
+    // client encoding
     sig_atomic_t volatile* m_clientencodingF;
     DTC::EncodingEnum volatile* m_clientencoding;
+    std::mutex m_clientencoding_mtx;
     DTC::EncodingEnum m_encoding = DTC::EncodingEnum::BINARY_ENCODING;
 
+    // client logon
     sig_atomic_t volatile* m_clientlogonF;
+    std::mutex m_clientlogon_mtx;
     DTC::LogonStatusEnum volatile* m_clientlogon;
 
+    // socket
     std::mutex m_sock_mtx;
     nc_socket_t *m_sock;
 
@@ -41,6 +48,7 @@ namespace dtcc {
     // callbacks
       // --- auxiliary --- //
         void Encoding(DTC::s_EncodingResponse *resp) {
+          std::lock_guard<std::mutex> lock(this->m_clientencoding_mtx);
           this->m_encoding = resp->Encoding;
           *this->m_clientencoding = this->m_encoding;
           *this->m_clientencodingF = true; // alert client value is now readable
@@ -63,6 +71,7 @@ namespace dtcc {
           const char *serverName, const char *symbolExchangeDelim,
           uint8_t *flags1, uint8_t *flags2
         ) {
+          std::lock_guard<std::mutex> lock(this->m_clientlogon_mtx);
           *this->m_clientlogon = result;
           *this->m_clientlogonF = true; // alert client value is now readable
 
@@ -127,7 +136,7 @@ namespace dtcc {
       bool ReadHeader(nc_socket_t *sock, void *buffer) {
         nc_error_t err = NC_ERR_NULL;
         size_t __notused_br = 0;
-        while (true) {
+        while (!(*this->m_exit)) {
           if (this->m_encoding == DTC::EncodingEnum::BINARY_ENCODING || this->m_encoding == DTC::EncodingEnum::BINARY_WITH_VARIABLE_LENGTH_STRINGS) {
             err = nread(sock, buffer, sizeof(DTC::s_MessageHeader), &__notused_br, NC_OPT_DO_ALL);
             if (err == NC_ERR_WOULD_BLOCK) { LOG("timeout on reading header"); continue; } // Timeout 
@@ -141,7 +150,7 @@ namespace dtcc {
             return true;
           }
         }
-        return false;
+        return true;
       }
       uint16_t GetType(const void *buffer) { 
         if (this->m_encoding == DTC::EncodingEnum::BINARY_ENCODING || this->m_encoding == DTC::EncodingEnum::BINARY_WITH_VARIABLE_LENGTH_STRINGS) {
@@ -346,7 +355,7 @@ namespace dtcc {
 
       while (!(*_this->m_exit)) {
         { // socket lock scope
-          std::lock_guard lock(_this->m_sock_mtx);
+          std::lock_guard<std::mutex> lock(_this->m_sock_mtx);
 
           // Read Header
           if (_this->ReadHeader(_this->m_sock, buffer)) {

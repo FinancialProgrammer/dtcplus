@@ -10,8 +10,6 @@
 
 #include <mutex>
 
-typedef void (*callback_t)(void*);
-
 namespace dtcc {
   struct BaseCallback {
     // exit
@@ -59,6 +57,7 @@ namespace dtcc {
           nc_error_t err = nwrite(this->m_sock, &hbreq, sizeof(hbreq), &_, NC_OPT_NULL);
           if (err != NC_ERR_GOOD) {
             WARN("Failed to write heatbeat back to server, %s", nstrerr(err));
+            *this->m_exit = true;
           }
         }
         void GeneralLog(const char *msg) { LOG("General Log %s", msg); }
@@ -139,7 +138,7 @@ namespace dtcc {
         while (!(*this->m_exit)) {
           if (this->m_encoding == DTC::EncodingEnum::BINARY_ENCODING || this->m_encoding == DTC::EncodingEnum::BINARY_WITH_VARIABLE_LENGTH_STRINGS) {
             err = nread(sock, buffer, sizeof(DTC::s_MessageHeader), &__notused_br, NC_OPT_DO_ALL);
-            if (err == NC_ERR_WOULD_BLOCK) { LOG("timeout on reading header"); continue; } // Timeout 
+            if (err == NC_ERR_WOULD_BLOCK) { continue; } // Timeout 
             else if (err != NC_ERR_GOOD) {
               ERR("Early exit by nread error '%s'", nstrerr(err));
               return true;
@@ -342,8 +341,7 @@ namespace dtcc {
     template <class ChildSocketT>
     static void receive_loop(
       ChildSocketT *_this,
-      void *buffer, size_t buffer_size,
-      volatile sig_atomic_t *exit_flag
+      void *buffer, size_t buffer_size
     ) {
       if (buffer == NULL) {
         ERR("Thread failed at start due to memory allocation failure");
@@ -370,8 +368,11 @@ namespace dtcc {
             break;
           }
 
+          if (msg_size <= sizeof(DTC::s_MessageHeader)) {
+            ERR("Invalid Msg Size would result in negative values to be read");
+            break;
+          }
           if (msg_size > buffer_size) {
-            LOG("Allocating bigger buffer");
             ::free(buffer);
             buffer_size = msg_size * 2;
             buffer = ::malloc(buffer_size);
@@ -394,7 +395,7 @@ namespace dtcc {
         _this->template filter<ChildSocketT>(_this, buffer);
       }
       ::free(buffer);
-      *exit_flag = true;
+      LOG("Thread has exited and set exit_flag");
     }
   };
 };

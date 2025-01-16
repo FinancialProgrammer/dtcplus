@@ -65,7 +65,9 @@ class Client {
 
   // sync
   volatile sig_atomic_t m_exit = false;
-  volatile sig_atomic_t m_threads_completed[T_thread_count];
+
+  // client's worker threads
+  std::thread m_threads[T_thread_count];
 
   // client-worker thread communication
   volatile sig_atomic_t m_encodingF = false; // set in recieve thread, checked in main thread
@@ -73,6 +75,10 @@ class Client {
 
   volatile sig_atomic_t m_logonresponseF = false; // set in recieve thread, checked in main thread
   volatile DTC::LogonStatusEnum m_logonresponse; // set in recieve thread, read in main thread
+
+  // Manually Closed Flag
+  bool m_manually_closed = false;
+
 public:
   CallbackT callbacks;
 
@@ -84,7 +90,7 @@ public: // special functions
   {}
   Client(const Client&) = delete;
   Client(Client&&);
-  ~Client() { this->close(); }
+  ~Client() { if (!this->m_manually_closed) this->close(); }
 
   void operator=(const Client&) = delete;
   void operator=(Client&&);
@@ -98,21 +104,22 @@ public: // backend
   void open(size_t recv_buffer_size) { // open connection to either historical or realtime server
     // start receive thread
     for (size_t i = 0; i < T_thread_count; ++i) {
-      std::thread tmpt(
+      this->m_threads[i] = std::thread(
         &(CallbackT::template receive_loop<CallbackT>),
         &this->callbacks,
-        malloc(recv_buffer_size), recv_buffer_size,
-        &m_threads_completed[i]
+        malloc(recv_buffer_size), recv_buffer_size
       );
-      tmpt.detach();
     }
   }
-  void close() { // rejoin receive thread
+  void close() { // rejoin receive threads
+    this->m_manually_closed = true;
     this->m_exit = true;
-    __local_dtcclient_close_repeat_label:
     for (size_t i = 0; i < T_thread_count; ++i) {
-      if (!m_threads_completed[i]) {
-        goto __local_dtcclient_close_repeat_label;
+      if (this->m_threads[i].joinable()) {
+        LOG("Joining thread %zu", i);
+        this->m_threads[i].join();
+      } else {
+        ERR("thread %zu is not joinable", i);
       }
     }
   }

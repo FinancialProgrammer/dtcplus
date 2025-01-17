@@ -116,7 +116,6 @@ public: // backend
     this->m_exit = true;
     for (size_t i = 0; i < T_thread_count; ++i) {
       if (this->m_threads[i].joinable()) {
-        LOG("Joining thread %zu", i);
         this->m_threads[i].join();
       } else {
         ERR("thread %zu is not joinable", i);

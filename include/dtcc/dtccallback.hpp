@@ -132,25 +132,6 @@ namespace dtcc {
       // --- order --- //
       // --- position --- //
     // backend
-      bool ReadHeader(nc_socket_t *sock, void *buffer) {
-        nc_error_t err = NC_ERR_NULL;
-        size_t __notused_br = 0;
-        while (!(*this->m_exit)) {
-          if (this->m_encoding == DTC::EncodingEnum::BINARY_ENCODING || this->m_encoding == DTC::EncodingEnum::BINARY_WITH_VARIABLE_LENGTH_STRINGS) {
-            err = nread(sock, buffer, sizeof(DTC::s_MessageHeader), &__notused_br, NC_OPT_DO_ALL);
-            if (err == NC_ERR_WOULD_BLOCK) { continue; } // Timeout 
-            else if (err != NC_ERR_GOOD) {
-              ERR("Early exit by nread error '%s'", nstrerr(err));
-              return true;
-            }
-            return false;
-          } else {
-            ERR("Encoding not supported");
-            return true;
-          }
-        }
-        return true;
-      }
       uint16_t GetType(const void *buffer) { 
         if (this->m_encoding == DTC::EncodingEnum::BINARY_ENCODING || this->m_encoding == DTC::EncodingEnum::BINARY_WITH_VARIABLE_LENGTH_STRINGS) {
           return ((DTC::s_MessageHeader*)buffer)->Type;
@@ -165,7 +146,7 @@ namespace dtcc {
         } else {
           ERR("Encoding not supported");
         }
-        return 65535; // max uint16 value
+        return 0; // max uint16 value
       }
       void set_socket(nc_socket_t *sock) { this->m_sock = sock; }
     // filter
@@ -356,7 +337,14 @@ namespace dtcc {
           std::lock_guard<std::mutex> lock(_this->m_sock_mtx);
 
           // Read Header
-          if (_this->ReadHeader(_this->m_sock, buffer)) {
+          if (_this->m_encoding == DTC::EncodingEnum::BINARY_ENCODING || _this->m_encoding == DTC::EncodingEnum::BINARY_WITH_VARIABLE_LENGTH_STRINGS) {
+            err = nread(_this->m_sock, buffer, sizeof(DTC::s_MessageHeader), &__notused_br, NC_OPT_DO_ALL);
+            if (err != NC_ERR_GOOD) {
+              ERR("Early exit by nread error '%s'", nstrerr(err));
+              break;
+            }
+          } else {
+            ERR("Encoding not supported");
             break;
           }
 
@@ -373,6 +361,7 @@ namespace dtcc {
             break;
           }
           if (msg_size > buffer_size) {
+            LOG("buffer size");
             ::free(buffer);
             buffer_size = msg_size * 2;
             buffer = ::malloc(buffer_size);
@@ -383,10 +372,7 @@ namespace dtcc {
           }
 
           err = nread(_this->m_sock, ((char*)buffer) + sizeof(DTC::s_MessageHeader), msg_size - sizeof(DTC::s_MessageHeader), &__notused_br, NC_OPT_DO_ALL);
-          if (err == NC_ERR_WOULD_BLOCK) { // timeout
-            LOG("read timeout on body read");
-            continue;
-          } else if (err != NC_ERR_GOOD) { 
+          if (err != NC_ERR_GOOD) { 
             LOG("Early exit by nread error '%s'", nstrerr(err));
             break; 
           }
@@ -395,7 +381,6 @@ namespace dtcc {
         _this->template filter<ChildSocketT>(_this, buffer);
       }
       ::free(buffer);
-      LOG("Thread has exited and set exit_flag");
     }
   };
 };
